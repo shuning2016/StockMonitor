@@ -1,0 +1,194 @@
+"""TopMonitor — 美股大市值监控
+
+两个视图：
+  1. 市值 > $100 亿的全部美股上市公司（市值 / 股价 / 行业）
+  2. 当日跌幅 TOP 30，每家可手动拉取最新 10 条新闻
+
+数据源：Nasdaq 公开 screener / news 接口（免费，无需 API key）。
+后端做代理的原因：Nasdaq 接口不开放 CORS，且必须带 User-Agent。
+"""
+import json
+import os
+import threading
+import time
+import urllib.parse
+import urllib.request
+
+from flask import Flask, jsonify, render_template, request
+
+app = Flask(__name__)
+
+# ── 配置 ────────────────────────────────────────────────────────────
+MIN_MARKET_CAP = 10_000_000_000        # $100 亿
+TOP_LOSERS = 30                        # 跌幅榜条数
+CACHE_TTL = 600                        # 行情缓存 10 分钟
+NEWS_LIMIT = 10                        # 每家公司新闻条数
+HTTP_TIMEOUT = 30
+
+SCREENER_URL = ("https://api.nasdaq.com/api/screener/stocks"
+                "?tableonly=true&limit=10000&offset=0&download=true")
+NEWS_URL = ("https://api.nasdaq.com/api/news/topic/articlebysymbol"
+            "?q={sym}%7Cstocks&offset=0&limit={limit}&fallback=true")
+NASDAQ_WEB = "https://www.nasdaq.com"
+
+HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/125.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+SECTOR_CN = {
+    "Technology": "科技",
+    "Finance": "金融",
+    "Consumer Discretionary": "可选消费",
+    "Consumer Staples": "必需消费",
+    "Health Care": "医疗保健",
+    "Industrials": "工业",
+    "Energy": "能源",
+    "Utilities": "公用事业",
+    "Real Estate": "房地产",
+    "Basic Materials": "基础材料",
+    "Telecommunications": "电信",
+    "Miscellaneous": "综合",
+}
+
+_cache = {"data": None, "ts": 0.0}
+_lock = threading.Lock()
+
+
+# ── 数据抓取 ────────────────────────────────────────────────────────
+def _get_json(url):
+    req = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        return json.load(resp)
+
+
+def _to_float(raw):
+    """把 '$123.45' / '1.23%' / '' 转成 float，失败返回 None。"""
+    if raw is None:
+        return None
+    s = str(raw).strip().replace("$", "").replace("%", "").replace(",", "")
+    if not s or s in {"--", "N/A", "NA"}:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def fetch_universe():
+    """抓全部美股上市公司，过滤出市值 > MIN_MARKET_CAP 的。"""
+    payload = _get_json(SCREENER_URL)
+    rows = (payload.get("data") or {}).get("rows") or []
+
+    out = []
+    for row in rows:
+        cap = _to_float(row.get("marketCap"))
+        if cap is None or cap < MIN_MARKET_CAP:
+            continue
+        sector = (row.get("sector") or "").strip()
+        out.append({
+            "symbol": (row.get("symbol") or "").strip(),
+            "name": (row.get("name") or "").strip(),
+            "marketCap": cap,
+            "marketCapB": round(cap / 1e9, 2),
+            "price": _to_float(row.get("lastsale")),
+            "changePct": _to_float(row.get("pctchange")),
+            "sector": sector,
+            "sectorCn": SECTOR_CN.get(sector, sector or "未分类"),
+            "industry": (row.get("industry") or "").strip(),
+            "country": (row.get("country") or "").strip(),
+        })
+
+    out.sort(key=lambda x: x["marketCap"], reverse=True)
+    return out
+
+
+def get_universe(force=False):
+    """带 TTL 缓存的行情读取。"""
+    with _lock:
+        fresh = (not force
+                 and _cache["data"] is not None
+                 and time.time() - _cache["ts"] < CACHE_TTL)
+        if fresh:
+            return _cache["data"], _cache["ts"], True
+
+    data = fetch_universe()
+    with _lock:
+        _cache["data"] = data
+        _cache["ts"] = time.time()
+    return data, _cache["ts"], False
+
+
+def fetch_news(symbol):
+    """取单只股票最新 NEWS_LIMIT 条新闻。"""
+    sym = urllib.parse.quote(symbol.upper().replace("/", "."), safe="")
+    payload = _get_json(NEWS_URL.format(sym=sym, limit=NEWS_LIMIT))
+    rows = (payload.get("data") or {}).get("rows") or []
+
+    items = []
+    for row in rows[:NEWS_LIMIT]:
+        url = (row.get("url") or "").strip()
+        if url.startswith("/"):
+            url = NASDAQ_WEB + url
+        items.append({
+            "title": (row.get("title") or "").strip(),
+            "publisher": (row.get("publisher") or "").strip(),
+            "created": (row.get("created") or "").strip(),
+            "url": url,
+        })
+    return items
+
+
+# ── 路由 ────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return render_template("index.html",
+                           min_cap_cn=f"{MIN_MARKET_CAP / 1e8:.0f} 亿",
+                           top_losers=TOP_LOSERS,
+                           news_limit=NEWS_LIMIT)
+
+
+@app.route("/api/stocks")
+def api_stocks():
+    force = request.args.get("refresh") == "1"
+    try:
+        data, ts, cached = get_universe(force=force)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"行情抓取失败：{exc}"}), 502
+
+    ranked = [s for s in data if s["changePct"] is not None]
+    losers = sorted(ranked, key=lambda x: x["changePct"])[:TOP_LOSERS]
+    gainers = sorted(ranked, key=lambda x: x["changePct"], reverse=True)[:TOP_LOSERS]
+
+    return jsonify({
+        "ok": True,
+        "updatedAt": ts,
+        "fromCache": cached,
+        "count": len(data),
+        "minMarketCap": MIN_MARKET_CAP,
+        "stocks": data,
+        "losers": losers,
+        "gainers": gainers,
+    })
+
+
+@app.route("/api/news/<path:symbol>")
+def api_news(symbol):
+    try:
+        items = fetch_news(symbol)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"新闻抓取失败：{exc}"}), 502
+    return jsonify({
+        "ok": True,
+        "symbol": symbol.upper(),
+        "fetchedAt": time.time(),
+        "items": items,
+    })
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="127.0.0.1", port=port, debug=True)
