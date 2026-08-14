@@ -9,6 +9,7 @@
 """
 import json
 import os
+import re
 import threading
 import time
 import urllib.parse
@@ -58,6 +59,65 @@ _cache = {"data": None, "ts": 0.0}
 _lock = threading.Lock()
 
 
+# ── 同一公司多代码合并 ──────────────────────────────────────────────
+# Nasdaq 会把同一家公司的 A/B 股、ADR、优先股、存托凭证分别列成一行，
+# 且给优先股行填的是「母公司市值」（例如 HBANL 显示 $509 亿，比正股
+# HBAN 的 $359 亿还高）。所以合并时必须优先选普通股作为代表，
+# 而不是简单取市值最大的那条。
+
+# 优先股 / 存托凭证 / 票据等衍生条目的起始标志，从这里截断
+_CUT = re.compile(
+    r"\s+(Depositary Shares?|Depository Shares?|\d+(\.\d+)?%|Preferred"
+    r"|Notes?\b|Warrants?\b|Rights?\b|Units?\b|Subordinated|Perpetual)", re.I)
+# 股份类别描述
+_SHARE = re.compile(
+    r"\s+(Class\s+[A-Z]\b|Series\s+[A-Z]\b|Common Stock|Capital Stock"
+    r"|Ordinary Shares?|American Depositary Shares?|New York Registry Shares?"
+    r"|Registered Shares?|Sponsored ADR|ADS)\b.*$", re.I)
+# 公司形式后缀
+_SUFFIX = re.compile(
+    r"\s*\b(Incorporated|Inc|Corporation|Corp|Company|Co|Limited|Ltd|PLC"
+    r"|N\.V\.|NV|S\.A\.|SA|S\.p\.A\.|AG|SE|Holdings?|Group|Trust|LP|L\.P\.)\b\.?",
+    re.I)
+# 非普通股特征
+_NON_COMMON = re.compile(
+    r"(Preferred|Depositary Shares?|Depository Shares?|\d+(\.\d+)?%"
+    r"|Notes?\b|Warrants?\b)", re.I)
+
+
+def company_key(name):
+    """把公司名归一化成合并用的 key。"""
+    n = _CUT.split(name)[0]
+    n = _SHARE.sub("", n)
+    n = _SUFFIX.sub("", n)
+    return re.sub(r"[^a-z0-9]", "", n.lower())
+
+
+def is_common_share(name):
+    """普通股/ADR 为 True，优先股、存托凭证、票据为 False。"""
+    return not _NON_COMMON.search(name)
+
+
+def mark_primaries(stocks):
+    """给每行标记是否为所属公司的代表代码，并挂上被合并的兄弟代码。"""
+    groups = {}
+    for s in stocks:
+        groups.setdefault(company_key(s["name"]), []).append(s)
+
+    for members in groups.values():
+        # 普通股优先，其次市值大的
+        members.sort(key=lambda s: (0 if is_common_share(s["name"]) else 1,
+                                    -s["marketCap"]))
+        head, rest = members[0], members[1:]
+        head["isPrimary"] = True
+        head["aliases"] = [s["symbol"] for s in rest]
+        for s in rest:
+            s["isPrimary"] = False
+            s["aliases"] = []
+            s["mergedInto"] = head["symbol"]
+    return stocks
+
+
 # ── 数据抓取 ────────────────────────────────────────────────────────
 def _get_json(url):
     req = urllib.request.Request(url, headers=HEADERS)
@@ -103,7 +163,7 @@ def fetch_universe():
         })
 
     out.sort(key=lambda x: x["marketCap"], reverse=True)
-    return out
+    return mark_primaries(out)
 
 
 def get_universe(force=False):
@@ -159,7 +219,8 @@ def api_stocks():
     except Exception as exc:
         return jsonify({"ok": False, "error": f"行情抓取失败：{exc}"}), 502
 
-    ranked = [s for s in data if s["changePct"] is not None]
+    # 涨跌榜只取每家公司的代表代码，避免 GOOGL/GOOG 这类重复占位
+    ranked = [s for s in data if s["isPrimary"] and s["changePct"] is not None]
     losers = sorted(ranked, key=lambda x: x["changePct"])[:TOP_LOSERS]
     gainers = sorted(ranked, key=lambda x: x["changePct"], reverse=True)[:TOP_LOSERS]
 
@@ -168,6 +229,7 @@ def api_stocks():
         "updatedAt": ts,
         "fromCache": cached,
         "count": len(data),
+        "companyCount": sum(1 for s in data if s["isPrimary"]),
         "minMarketCap": MIN_MARKET_CAP,
         "stocks": data,
         "losers": losers,

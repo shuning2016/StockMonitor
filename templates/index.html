@@ -108,6 +108,12 @@
   .tag{display:inline-block;background:#EEF2F8;color:var(--navy);
     border-radius:4px;padding:2px 8px;font-size:12px}
   .tag.y{background:#FFF6DC;color:#7A5B00}
+  .alias{display:inline-block;background:#EAF5FB;color:var(--blue);border:1px solid #CFE7F5;
+    border-radius:4px;padding:1px 6px;font-size:11px;margin-left:5px;font-weight:400}
+  .merged{color:var(--muted);font-size:11px;margin-left:5px}
+  .chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink);
+    cursor:pointer;user-select:none;white-space:nowrap}
+  .chk input{accent-color:var(--orange);width:15px;height:15px;cursor:pointer}
   .more{text-align:center;padding:14px}
 
   /* ── Losers list ── */
@@ -186,7 +192,8 @@
   <!-- ── 市值榜 ── -->
   <section class="panel" id="panel-cap">
     <div class="stats">
-      <div class="stat"><div class="k">公司数量（&gt; ${{ min_cap_cn }}）</div><div class="v" id="s-count">—</div></div>
+      <div class="stat"><div class="k">公司数量（&gt; ${{ min_cap_cn }}）</div><div class="v" id="s-count">—</div>
+        <div class="k" style="margin:2px 0 0" id="s-count-note"></div></div>
       <div class="stat b"><div class="k">合计市值</div><div class="v" id="s-cap">—</div></div>
       <div class="stat u"><div class="k">上涨家数</div><div class="v up" id="s-up">—</div></div>
       <div class="stat d"><div class="k">下跌家数</div><div class="v down" id="s-down">—</div></div>
@@ -204,6 +211,7 @@
         <option value="desc">从高到低</option>
         <option value="asc">从低到高</option>
       </select>
+      <label class="chk"><input type="checkbox" id="expand"> 展开同一公司的全部代码</label>
       <span class="count-note" id="filterNote"></span>
     </div>
 
@@ -299,11 +307,14 @@ async function load(force){
 }
 
 function renderStats(){
-  const total = STOCKS.reduce((a,s) => a + s.marketCap, 0);
-  $('s-count').textContent = STOCKS.length.toLocaleString() + ' 家';
+  /* 统计一律按「每家公司一条」口径，否则 GOOGL+GOOG 会把市值算两遍 */
+  const co = STOCKS.filter(s => s.isPrimary);
+  const total = co.reduce((a,s) => a + s.marketCap, 0);
+  $('s-count').textContent = co.length.toLocaleString() + ' 家';
   $('s-cap').textContent = '$' + (total/1e12).toFixed(1) + ' 万亿';
-  $('s-up').textContent = STOCKS.filter(s => s.changePct > 0).length + ' 家';
-  $('s-down').textContent = STOCKS.filter(s => s.changePct < 0).length + ' 家';
+  $('s-up').textContent = co.filter(s => s.changePct > 0).length + ' 家';
+  $('s-down').textContent = co.filter(s => s.changePct < 0).length + ' 家';
+  $('s-count-note').textContent = `已合并 ${STOCKS.length - co.length} 个重复代码`;
 }
 
 function buildSectors(){
@@ -321,7 +332,8 @@ function buildSectors(){
 function applyFilter(){
   const q = $('q').value.trim().toLowerCase();
   const sec = $('sector').value;
-  view = STOCKS.filter(s =>
+  const base = $('expand').checked ? STOCKS : STOCKS.filter(s => s.isPrimary);
+  view = base.filter(s =>
     (!sec || s.sector === sec) &&
     (!q || s.symbol.toLowerCase().includes(q)
         || s.name.toLowerCase().includes(q)
@@ -340,7 +352,9 @@ function applyFilter(){
   ['cap','price','chg'].forEach(k =>
     $('a-' + k).textContent = k === sortBy ? (sortDir === 'asc' ? '▲' : '▼') : '');
 
-  $('filterNote').textContent = `符合条件 ${view.length} / ${STOCKS.length} 家`;
+  $('filterNote').textContent = $('expand').checked
+    ? `符合条件 ${view.length} / ${STOCKS.length} 个代码`
+    : `符合条件 ${view.length} / ${base.length} 家公司`;
   $('capBody').innerHTML = '';
   shown = 0;
   renderMore();
@@ -351,7 +365,11 @@ function renderMore(){
   $('capBody').insertAdjacentHTML('beforeend', slice.map((s,i) => `
     <tr>
       <td class="rank">${shown + i + 1}</td>
-      <td class="sym">${esc(s.symbol)}</td>
+      <td class="sym">${esc(s.symbol)}${
+        s.aliases && s.aliases.length
+          ? `<span class="alias" title="同一公司的其他代码：${esc(s.aliases.join(', '))}">+${s.aliases.length}</span>`
+          : ''}${
+        s.isPrimary === false ? `<span class="merged">→ ${esc(s.mergedInto)}</span>` : ''}</td>
       <td class="coname">${esc(s.name)}</td>
       <td class="num"><b>${fmtCap(s.marketCap)}</b></td>
       <td class="num">${fmtPrice(s.price)}</td>
@@ -371,7 +389,10 @@ function renderLosers(){
       <div class="loser-head">
         <div class="badge ${i > 9 ? 'dim' : ''}">${i+1}</div>
         <div class="loser-id">
-          <span class="s">${esc(s.symbol)}</span>
+          <span class="s">${esc(s.symbol)}</span>${
+            s.aliases && s.aliases.length
+              ? `<span class="alias" title="同一公司的其他代码：${esc(s.aliases.join(', '))}">+${s.aliases.length}</span>`
+              : ''}
           <span class="n">${esc(s.name)}</span>
         </div>
         <div class="kv"><div class="k">跌幅</div><div class="v down">${s.changePct.toFixed(2)}%</div></div>
@@ -442,6 +463,7 @@ $('q').oninput = () => { clearTimeout(timer); timer = setTimeout(applyFilter, 20
 $('sector').onchange = applyFilter;
 $('sortBy').onchange = () => { sortBy = $('sortBy').value; applyFilter(); };
 $('sortDir').onchange = () => { sortDir = $('sortDir').value; applyFilter(); };
+$('expand').onchange = applyFilter;
 $('moreBtn').onclick = renderMore;
 $('reloadBtn').onclick = () => load(true);
 
