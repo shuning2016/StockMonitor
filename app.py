@@ -17,14 +17,17 @@ import urllib.request
 
 from flask import Flask, jsonify, render_template, request
 
-app = Flask(__name__)
+# 显式指定模板目录：serverless 环境下工作目录不一定是本文件所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"))
 
 # ── 配置 ────────────────────────────────────────────────────────────
 MIN_MARKET_CAP = 10_000_000_000        # $100 亿
 TOP_LOSERS = 30                        # 跌幅榜条数
 CACHE_TTL = 600                        # 行情缓存 10 分钟
 NEWS_LIMIT = 10                        # 每家公司新闻条数
-HTTP_TIMEOUT = 30
+# 短于 Vercel 函数执行上限，超时要能返回错误而不是被平台直接掐断
+HTTP_TIMEOUT = 15
 
 SCREENER_URL = ("https://api.nasdaq.com/api/screener/stocks"
                 "?tableonly=true&limit=10000&offset=0&download=true")
