@@ -33,6 +33,7 @@ EXCLUDED_SECTORS = {
 }
 CACHE_TTL = 600                        # 行情缓存 10 分钟
 NEWS_LIMIT = 10                        # 每家公司新闻条数
+NEWS_TTL = 600                         # 新闻按代码缓存 10 分钟
 # 短于 Vercel 函数执行上限，超时要能返回错误而不是被平台直接掐断
 HTTP_TIMEOUT = 15
 # 翻译是锦上添花，超时更短：宁可只显示英文原文，也不拖垮整个新闻请求
@@ -72,6 +73,10 @@ SECTOR_CN = {
 
 _cache = {"data": None, "ts": 0.0}
 _lock = threading.Lock()
+
+# 新闻缓存：{代码: {"items": [...], "ts": 抓取时间}}
+_news_cache = {}
+_news_lock = threading.Lock()
 
 
 # ── 同一公司多代码合并 ──────────────────────────────────────────────
@@ -289,16 +294,34 @@ def api_stocks():
     })
 
 
+def get_news(symbol, force=False):
+    """带 TTL 缓存的新闻读取，返回 (条目, 抓取时间, 是否命中缓存)。"""
+    key = symbol.upper()
+    if not force:
+        with _news_lock:
+            hit = _news_cache.get(key)
+            if hit and time.time() - hit["ts"] < NEWS_TTL:
+                return hit["items"], hit["ts"], True
+
+    items = fetch_news(symbol)
+    with _news_lock:
+        _news_cache[key] = {"items": items, "ts": time.time()}
+        return items, _news_cache[key]["ts"], False
+
+
 @app.route("/api/news/<path:symbol>")
 def api_news(symbol):
+    force = request.args.get("refresh") == "1"
     try:
-        items = fetch_news(symbol)
+        items, ts, cached = get_news(symbol, force=force)
     except Exception as exc:
         return jsonify({"ok": False, "error": f"新闻抓取失败：{exc}"}), 502
     return jsonify({
         "ok": True,
         "symbol": symbol.upper(),
-        "fetchedAt": time.time(),
+        "fetchedAt": ts,
+        "fromCache": cached,
+        "ttl": NEWS_TTL,
         "items": items,
     })
 

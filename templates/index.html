@@ -144,6 +144,9 @@
   .news .m{font-size:12px;color:var(--muted);margin-top:2px}
   .news .m b{color:var(--blue);font-weight:500}
   .hint{font-size:12px;color:var(--muted)}
+  .cachetag{display:inline-block;background:#FFF6DC;color:#7A5B00;border-radius:4px;
+    padding:1px 7px;font-size:11px;margin-left:6px}
+  .relink{font-size:11px;margin-left:8px}
   .err{color:var(--red);font-size:13px}
 
   .loading{padding:50px;text-align:center;color:var(--muted)}
@@ -408,23 +411,41 @@ function renderLosers(){
     </div>`).join('');
 }
 
-async function loadNews(sym, btn){
+/* 已加载过新闻的代码；决定按钮是「抓取」还是「收起/展开」 */
+const NEWS_LOADED = new Set();
+
+function setNewsBtn(btn, mode){
+  btn.textContent = mode === 'init' ? '刷新新闻' : mode === 'open' ? '收起 ▲' : '展开 ▼';
+}
+
+function toggleNews(sym, btn){
+  const open = $('nw-' + sym).classList.toggle('on');
+  setNewsBtn(btn, open ? 'open' : 'closed');
+}
+
+async function loadNews(sym, btn, force){
   const box = $('nw-' + sym);
   box.classList.add('on');
   box.innerHTML = '<span class="spin"></span>正在抓取最新新闻…';
   btn.disabled = true;
   try{
-    const r = await fetch('/api/news/' + encodeURIComponent(sym));
+    const r = await fetch('/api/news/' + encodeURIComponent(sym) + (force ? '?refresh=1' : ''));
     const d = await r.json();
     if(!d.ok) throw new Error(d.error || '未知错误');
+    NEWS_LOADED.add(sym);
+    setNewsBtn(btn, 'open');
     if(!d.items.length){
       box.innerHTML = '<span class="hint">暂无该公司的新闻。</span>';
       return;
     }
     const at = new Date(d.fetchedAt * 1000).toLocaleTimeString('zh-CN',{hour12:false});
+    /* 缓存剩余时间按服务端返回的抓取时刻算，客户端时钟偏差时夹到 0 */
+    const left = Math.max(0, Math.ceil((d.fetchedAt + d.ttl - Date.now()/1000) / 60));
     box.innerHTML = `
       <div class="hint" style="margin-bottom:6px">
         ${esc(sym)} 最新 ${d.items.length} 条 · 抓取于 ${at}
+        ${d.fromCache ? `<span class="cachetag">缓存 · ${left} 分钟后过期</span>` : ''}
+        <a class="relink" href="#" data-renews="${esc(sym)}">强制重新抓取</a>
       </div>
       <ol>${d.items.map(n => `
         <li>
@@ -435,6 +456,7 @@ async function loadNews(sym, btn){
       </ol>`;
   }catch(e){
     box.innerHTML = '<span class="err">新闻加载失败：' + esc(e.message) + '</span>';
+    if(!NEWS_LOADED.has(sym)) setNewsBtn(btn, 'init');
   }finally{
     btn.disabled = false;
   }
@@ -457,8 +479,19 @@ document.querySelectorAll('th.sortable').forEach(th => th.onclick = () => {
 });
 
 $('loserList').addEventListener('click', e => {
+  const re = e.target.closest('[data-renews]');
+  if(re){
+    e.preventDefault();
+    const sym = re.dataset.renews;
+    loadNews(sym, document.querySelector(`[data-news="${CSS.escape(sym)}"]`), true);
+    return;
+  }
   const btn = e.target.closest('[data-news]');
-  if(btn) loadNews(btn.dataset.news, btn);
+  if(!btn) return;
+  const sym = btn.dataset.news;
+  /* 已加载过就只做展开/收起，不再打接口 */
+  if(NEWS_LOADED.has(sym)) toggleNews(sym, btn);
+  else loadNews(sym, btn, false);
 });
 
 let timer;
