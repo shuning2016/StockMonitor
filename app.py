@@ -79,6 +79,32 @@ _news_cache = {}
 _news_lock = threading.Lock()
 
 
+# ── 财报日期 ────────────────────────────────────────────────────────
+# Nasdaq 只有「按日期查当天财报公司」的日历接口，没有「按代码查财报日」，
+# 逐日扫描一个季度窗口需要约 140 个请求 / 30 秒，超过 serverless 执行上限，
+# 所以由 build_earnings.py 离线生成、随仓库提交，这里启动时一次性加载。
+EARNINGS_FILE = os.path.join(BASE_DIR, "data", "earnings.json")
+
+
+def _load_earnings():
+    try:
+        with open(EARNINGS_FILE, encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload.get("earnings") or {}, payload.get("generatedAt")
+    except Exception:
+        # 数据文件缺失不应影响主功能，退化为「无财报日期」
+        return {}, None
+
+
+EARNINGS, EARNINGS_AT = _load_earnings()
+
+
+def earnings_for(symbol):
+    """screener 用斜杠表示股份类别（BRK/A），财报日历用点号（BF.A），需归一化。"""
+    key = symbol.upper()
+    return EARNINGS.get(key) or EARNINGS.get(key.replace("/", ".")) or {}
+
+
 # ── 同一公司多代码合并 ──────────────────────────────────────────────
 # Nasdaq 会把同一家公司的 A/B 股、ADR、优先股、存托凭证分别列成一行，
 # 且给优先股行填的是「母公司市值」（例如 HBANL 显示 $509 亿，比正股
@@ -171,8 +197,12 @@ def fetch_universe():
         sector = (row.get("sector") or "").strip()
         if sector in EXCLUDED_SECTORS:
             continue
+        symbol = (row.get("symbol") or "").strip()
+        earn = earnings_for(symbol)
         out.append({
-            "symbol": (row.get("symbol") or "").strip(),
+            "symbol": symbol,
+            "lastEarnings": earn.get("last"),
+            "nextEarnings": earn.get("next"),
             "name": (row.get("name") or "").strip(),
             "marketCap": cap,
             "marketCapB": round(cap / 1e9, 2),
@@ -287,6 +317,7 @@ def api_stocks():
         "fromCache": cached,
         "count": len(data),
         "companyCount": sum(1 for s in data if s["isPrimary"]),
+        "earningsGeneratedAt": EARNINGS_AT,
         "minMarketCap": MIN_MARKET_CAP,
         "stocks": data,
         "losers": losers,

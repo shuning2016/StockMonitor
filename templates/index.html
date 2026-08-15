@@ -109,6 +109,9 @@
   .tag{display:inline-block;background:#EEF2F8;color:var(--navy);
     border-radius:4px;padding:2px 8px;font-size:12px}
   .tag.y{background:#FFF6DC;color:#7A5B00}
+  .earn{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .earn .sep{color:#C3CCDE;margin:0 2px}
+  .earn .soon{background:#FFF6DC;color:#7A5B00;border-radius:4px;padding:1px 5px;font-weight:700}
   .alias{display:inline-block;background:#EAF5FB;color:var(--blue);border:1px solid #CFE7F5;
     border-radius:4px;padding:1px 6px;font-size:11px;margin-left:5px;font-weight:400}
   .merged{color:var(--muted);font-size:11px;margin-left:5px}
@@ -230,6 +233,7 @@
             <th class="num sortable" data-sort="cap">市值（美元）<span class="arrow" id="a-cap">▼</span></th>
             <th class="num sortable" data-sort="price">股价（$）<span class="arrow" id="a-price"></span></th>
             <th class="num sortable" data-sort="chg">涨跌幅<span class="arrow" id="a-chg"></span></th>
+            <th>财报（上次 / 下次）</th>
             <th>所属行业</th>
             <th>细分行业</th>
           </tr>
@@ -274,6 +278,27 @@ function fmtCap(usd){
 const fmtPrice = p => p == null ? '—' : p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* 财报日期：只显示月-日省宽度，完整日期放 title；下次财报 14 天内高亮 */
+const MS_DAY = 86400000;
+function md(iso){ return iso ? iso.slice(5) : null; }
+function daysTo(iso){
+  return Math.ceil((new Date(iso + 'T00:00:00') - new Date().setHours(0,0,0,0)) / MS_DAY);
+}
+function earnCell(s){
+  const last = md(s.lastEarnings), next = md(s.nextEarnings);
+  if(!last && !next) return '<span class="flat">—</span>';
+  const l = last ? `<span title="上次财报 ${esc(s.lastEarnings)}">${last}</span>`
+                 : '<span class="flat">—</span>';
+  let n = '<span class="flat">—</span>';
+  if(next){
+    const d = daysTo(s.nextEarnings);
+    const soon = d >= 0 && d <= 14;
+    n = `<span class="${soon ? 'soon' : ''}" title="下次财报 ${esc(s.nextEarnings)}${
+      d >= 0 ? `（${d} 天后）` : ''}">${next}</span>`;
+  }
+  return `${l} <span class="sep">/</span> ${n}`;
+}
 
 function chgCell(v){
   if (v == null) return '<span class="flat">—</span>';
@@ -379,6 +404,7 @@ function renderMore(){
       <td class="num"><b>${fmtCap(s.marketCap)}</b></td>
       <td class="num">${fmtPrice(s.price)}</td>
       <td class="num">${chgCell(s.changePct)}</td>
+      <td class="earn">${earnCell(s)}</td>
       <td><span class="tag">${esc(s.sectorCn)}</span></td>
       <td>${esc(s.industry || '—')}</td>
     </tr>`).join(''));
@@ -403,6 +429,8 @@ function renderLosers(){
         <div class="kv"><div class="k">跌幅</div><div class="v down">${s.changePct.toFixed(2)}%</div></div>
         <div class="kv"><div class="k">股价</div><div class="v">$${fmtPrice(s.price)}</div></div>
         <div class="kv" style="min-width:100px"><div class="k">市值</div><div class="v">${fmtCap(s.marketCap)}</div></div>
+        <div class="kv" style="min-width:118px"><div class="k">财报 上次/下次</div>
+          <div class="earn" style="font-size:13px;font-weight:500">${earnCell(s)}</div></div>
         <div class="kv" style="min-width:100px"><div class="k">行业</div>
           <div><span class="tag y">${esc(s.sectorCn)}</span></div></div>
         <button class="btn btn-blue btn-sm" data-news="${esc(s.symbol)}">刷新新闻</button>
