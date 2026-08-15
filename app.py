@@ -35,11 +35,16 @@ CACHE_TTL = 600                        # 行情缓存 10 分钟
 NEWS_LIMIT = 10                        # 每家公司新闻条数
 # 短于 Vercel 函数执行上限，超时要能返回错误而不是被平台直接掐断
 HTTP_TIMEOUT = 15
+# 翻译是锦上添花，超时更短：宁可只显示英文原文，也不拖垮整个新闻请求
+TRANSLATE_TIMEOUT = 6
 
 SCREENER_URL = ("https://api.nasdaq.com/api/screener/stocks"
                 "?tableonly=true&limit=10000&offset=0&download=true")
 NEWS_URL = ("https://api.nasdaq.com/api/news/topic/articlebysymbol"
             "?q={sym}%7Cstocks&offset=0&limit={limit}&fallback=true")
+# 新闻标题翻译（免费、无需 key，一次请求批量翻译整页标题）
+TRANSLATE_URL = ("https://translate.googleapis.com/translate_a/t"
+                 "?client=gtx&sl=en&tl=zh-CN&format=text&{qs}")
 NASDAQ_WEB = "https://www.nasdaq.com"
 
 HEADERS = {
@@ -129,9 +134,9 @@ def mark_primaries(stocks):
 
 
 # ── 数据抓取 ────────────────────────────────────────────────────────
-def _get_json(url):
+def _get_json(url, timeout=None):
     req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+    with urllib.request.urlopen(req, timeout=timeout or HTTP_TIMEOUT) as resp:
         return json.load(resp)
 
 
@@ -194,6 +199,34 @@ def get_universe(force=False):
     return data, _cache["ts"], False
 
 
+def translate_titles(titles):
+    """批量把英文标题译成中文。
+
+    翻译失败不应连累新闻本身，所以任何异常都退化为「不翻译」，
+    返回与入参等长的 None 列表，前端只显示原文。
+    """
+    if not titles:
+        return []
+    try:
+        qs = "&".join("q=" + urllib.parse.quote(t) for t in titles)
+        payload = _get_json(TRANSLATE_URL.format(qs=qs), timeout=TRANSLATE_TIMEOUT)
+        # 单条时返回字符串，多条时返回列表；元素偶尔是 [译文, 源语言]
+        if isinstance(payload, str):
+            payload = [payload]
+        out = []
+        for item in payload:
+            if isinstance(item, str):
+                out.append(item)
+            elif isinstance(item, list) and item and isinstance(item[0], str):
+                out.append(item[0])
+            else:
+                out.append(None)
+        # 长度对不上说明格式不符合预期，宁可全部不翻译也不错位
+        return out if len(out) == len(titles) else [None] * len(titles)
+    except Exception:
+        return [None] * len(titles)
+
+
 def fetch_news(symbol):
     """取单只股票最新 NEWS_LIMIT 条新闻。"""
     sym = urllib.parse.quote(symbol.upper().replace("/", "."), safe="")
@@ -211,6 +244,11 @@ def fetch_news(symbol):
             "created": (row.get("created") or "").strip(),
             "url": url,
         })
+
+    for item, zh in zip(items, translate_titles([i["title"] for i in items])):
+        # 译文与原文相同视为无效翻译，前端就不必重复显示两遍
+        item["titleCn"] = zh if zh and zh != item["title"] else None
+
     return items
 
 

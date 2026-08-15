@@ -139,6 +139,7 @@
   .news li:last-child{border-bottom:0}
   .news .t{font-weight:500;color:var(--navy)}
   .news .t:hover{color:var(--blue)}
+  .news .orig{font-size:12px;color:#8A97AE;margin-top:2px;line-height:1.4}
   .news .m{font-size:12px;color:var(--muted);margin-top:2px}
   .news .m b{color:var(--blue);font-weight:500}
   .hint{font-size:12px;color:var(--muted)}
@@ -426,7 +427,8 @@ async function loadNews(sym, btn){
       </div>
       <ol>${d.items.map(n => `
         <li>
-          <a class="t" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>
+          <a class="t" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.titleCn || n.title)}</a>
+          ${n.titleCn ? `<div class="orig">${esc(n.title)}</div>` : ''}
           <div class="m"><b>${esc(n.publisher || '—')}</b> · ${esc(n.created || '')}</div>
         </li>`).join('')}
       </ol>`;
