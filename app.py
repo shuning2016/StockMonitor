@@ -24,6 +24,13 @@ app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"))
 # ── 配置 ────────────────────────────────────────────────────────────
 MIN_MARKET_CAP = 10_000_000_000        # $100 亿
 TOP_LOSERS = 30                        # 跌幅榜条数
+# 不纳入监控的板块（在数据源层剔除，市值榜/统计/跌幅榜口径一致）
+EXCLUDED_SECTORS = {
+    "Utilities",                # 公用事业
+    "Real Estate",              # 房地产
+    "Consumer Discretionary",   # 可选消费
+    "Miscellaneous",            # 综合
+}
 CACHE_TTL = 600                        # 行情缓存 10 分钟
 NEWS_LIMIT = 10                        # 每家公司新闻条数
 # 短于 Vercel 函数执行上限，超时要能返回错误而不是被平台直接掐断
@@ -152,6 +159,8 @@ def fetch_universe():
         if cap is None or cap < MIN_MARKET_CAP:
             continue
         sector = (row.get("sector") or "").strip()
+        if sector in EXCLUDED_SECTORS:
+            continue
         out.append({
             "symbol": (row.get("symbol") or "").strip(),
             "name": (row.get("name") or "").strip(),
@@ -208,10 +217,12 @@ def fetch_news(symbol):
 # ── 路由 ────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
+    excluded_cn = "、".join(SECTOR_CN.get(s, s) for s in sorted(EXCLUDED_SECTORS))
     return render_template("index.html",
                            min_cap_cn=f"{MIN_MARKET_CAP / 1e8:.0f} 亿",
                            top_losers=TOP_LOSERS,
-                           news_limit=NEWS_LIMIT)
+                           news_limit=NEWS_LIMIT,
+                           excluded_cn=excluded_cn)
 
 
 @app.route("/api/stocks")

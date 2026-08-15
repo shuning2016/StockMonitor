@@ -169,7 +169,7 @@
     </svg>
     <div>
       <h1>TopMonitor</h1>
-      <span>美股市值 &gt; ${{ min_cap_cn }} · 大盘股监控台</span>
+      <span>美股市值 &gt; ${{ min_cap_cn }} · 已排除 {{ excluded_cn }}</span>
     </div>
   </div>
   <div class="head-right">
@@ -240,7 +240,7 @@
   <!-- ── 跌幅榜 ── -->
   <section class="panel" id="panel-losers">
     <div class="lead">
-      按最近一个交易日收盘跌幅排序，取市值 &gt; ${{ min_cap_cn }}公司中的前 {{ top_losers }} 名。
+      按最近一个交易日收盘跌幅排序，取市值 &gt; ${{ min_cap_cn }}公司中的前 {{ top_losers }} 名（已排除 {{ excluded_cn }}）。
       点任意一家的「刷新新闻」，即时抓取该公司最新 {{ news_limit }} 条新闻。
     </div>
     <div id="loserList"></div>
