@@ -112,6 +112,10 @@
   .earn{font-variant-numeric:tabular-nums;white-space:nowrap}
   .earn .sep{color:#C3CCDE;margin:0 2px}
   .earn .soon{background:#FFF6DC;color:#7A5B00;border-radius:4px;padding:1px 5px;font-weight:700}
+  /* 刚公布财报：跌幅榜上往往就是当天大跌的直接原因，用品牌橙点出来 */
+  .earn .justdate{background:#FFE9E3;color:var(--orange);border-radius:4px;padding:1px 5px;font-weight:700}
+  .just{display:inline-block;background:var(--orange);color:#fff;border-radius:4px;
+    padding:2px 8px;font-size:11px;font-weight:500;margin-left:6px;white-space:nowrap;vertical-align:2px}
   .alias{display:inline-block;background:#EAF5FB;color:var(--blue);border:1px solid #CFE7F5;
     border-radius:4px;padding:1px 6px;font-size:11px;margin-left:5px;font-weight:400}
   .merged{color:var(--muted);font-size:11px;margin-left:5px}
@@ -125,7 +129,8 @@
     border-radius:var(--radius);padding:12px 16px;margin-bottom:14px;font-size:13px;color:var(--muted)}
   .loser{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
     margin-bottom:10px;overflow:hidden}
-  .loser-head{display:flex;align-items:center;gap:14px;padding:13px 16px;flex-wrap:wrap}
+  .loser-head{display:flex;align-items:center;gap:14px;padding:13px 16px}
+  .metrics{display:flex;align-items:center;gap:14px;margin-left:auto}
   .badge{width:30px;height:30px;flex:0 0 30px;border-radius:50%;background:var(--down);color:#fff;
     display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
   .badge.dim{background:var(--navy)}
@@ -134,8 +139,11 @@
   .loser-id .n{font-size:12px;color:var(--muted);
     display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
   .kv{text-align:right;min-width:86px}
-  .kv .k{font-size:11px;color:var(--muted)}
+  .kv-earn{min-width:122px}
+  .kv-sector{min-width:64px}
+  .kv .k{font-size:11px;color:var(--muted);white-space:nowrap}
   .kv .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
+  .kv .earn.v{font-size:13px;font-weight:500}
   .news{border-top:1px solid var(--line);background:#FAFBFD;padding:12px 16px;display:none}
   .news.on{display:block}
   .news ol{margin:0;padding-left:22px}
@@ -158,10 +166,43 @@
   @keyframes sp{to{transform:rotate(360deg)}}
 
   footer{text-align:center;color:var(--muted);font-size:12px;padding:0 24px 30px}
+  /* ── 手机端 ── */
   @media(max-width:640px){
-    header,main,nav.tabs{padding-left:14px;padding-right:14px}
-    .head-right{width:100%;margin-left:0;justify-content:space-between}
-    .loser-id .n{max-width:220px}
+    header,main,nav.tabs{padding-left:12px;padding-right:12px}
+    header{padding-top:14px;padding-bottom:14px;gap:10px}
+    .brand h1{font-size:18px}
+    .brand span{font-size:11px;line-height:1.35}
+    .head-right{width:100%;margin-left:0;justify-content:space-between;align-items:flex-end}
+    .stamp{text-align:left;font-size:11px}
+    nav.tabs button{padding:12px 12px;font-size:13px}
+    main{padding-top:14px}
+
+    /* 统计卡改 2×2，别让四张卡吃掉一屏 */
+    .stats{grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+    .stat{padding:10px 12px;border-left-width:3px}
+    .stat .k{font-size:11px}
+    .stat .v{font-size:18px}
+
+    .toolbar{padding:10px;gap:8px}
+    input[type=search]{min-width:0;width:100%;flex:1 0 100%}
+    .toolbar select{flex:1 1 calc(50% - 4px);min-width:0}
+    .chk{flex:1 0 100%}
+    .count-note{margin-left:0;flex:1 0 100%}
+
+    /* 跌幅榜卡片：改成 代码行 → 指标网格 → 整宽按钮 */
+    .loser-head{display:grid;grid-template-columns:auto 1fr;gap:10px 12px;
+      align-items:center;padding:12px}
+    .loser-id{min-width:0}
+    .loser-id .n{max-width:100%;font-size:11px}
+    .metrics{grid-column:1 / -1;margin-left:0;display:grid;
+      grid-template-columns:repeat(3,1fr);gap:10px 8px}
+    .kv,.kv-earn,.kv-sector{text-align:left;min-width:0}
+    .kv .v{font-size:15px}
+    .kv-earn{grid-column:span 2}
+    .loser-head > .btn{grid-column:1 / -1;width:100%;padding:9px}
+    .news{padding:12px}
+    .news ol{padding-left:18px}
+    .just{margin-left:0;margin-top:3px}
   }
 </style>
 </head>
@@ -285,10 +326,27 @@ function md(iso){ return iso ? iso.slice(5) : null; }
 function daysTo(iso){
   return Math.ceil((new Date(iso + 'T00:00:00') - new Date().setHours(0,0,0,0)) / MS_DAY);
 }
+/* 刚公布财报（3 天内）——跌幅榜上这往往就是当天大跌的直接原因 */
+const JUST_DAYS = 3;
+function daysSince(iso){ return -daysTo(iso); }
+function isJustReported(iso){
+  if(!iso) return false;
+  const d = daysSince(iso);
+  return d >= 0 && d <= JUST_DAYS;
+}
+function justReportedTag(iso){
+  if(!isJustReported(iso)) return '';
+  const d = daysSince(iso);
+  const when = d === 0 ? '今天' : `${d} 天前`;
+  return `<span class="just" title="${esc(iso)} 公布财报">刚发财报 · ${when}</span>`;
+}
+
 function earnCell(s){
   const last = md(s.lastEarnings), next = md(s.nextEarnings);
   if(!last && !next) return '<span class="flat">—</span>';
-  const l = last ? `<span title="上次财报 ${esc(s.lastEarnings)}">${last}</span>`
+  const just = isJustReported(s.lastEarnings);
+  const l = last ? `<span class="${just ? 'justdate' : ''}" title="上次财报 ${esc(s.lastEarnings)}${
+                     just ? `（${daysSince(s.lastEarnings) || '今天'}${daysSince(s.lastEarnings) ? ' 天前' : ''}）` : ''}">${last}</span>`
                  : '<span class="flat">—</span>';
   let n = '<span class="flat">—</span>';
   if(next){
@@ -424,15 +482,18 @@ function renderLosers(){
             s.aliases && s.aliases.length
               ? `<span class="alias" title="同一公司的其他代码：${esc(s.aliases.join(', '))}">+${s.aliases.length}</span>`
               : ''}
+          ${justReportedTag(s.lastEarnings)}
           <span class="n">${esc(s.name)}</span>
         </div>
-        <div class="kv"><div class="k">跌幅</div><div class="v down">${s.changePct.toFixed(2)}%</div></div>
-        <div class="kv"><div class="k">股价</div><div class="v">$${fmtPrice(s.price)}</div></div>
-        <div class="kv" style="min-width:100px"><div class="k">市值</div><div class="v">${fmtCap(s.marketCap)}</div></div>
-        <div class="kv" style="min-width:118px"><div class="k">财报 上次/下次</div>
-          <div class="earn" style="font-size:13px;font-weight:500">${earnCell(s)}</div></div>
-        <div class="kv" style="min-width:100px"><div class="k">行业</div>
-          <div><span class="tag y">${esc(s.sectorCn)}</span></div></div>
+        <div class="metrics">
+          <div class="kv"><div class="k">跌幅</div><div class="v down">${s.changePct.toFixed(2)}%</div></div>
+          <div class="kv"><div class="k">股价</div><div class="v">$${fmtPrice(s.price)}</div></div>
+          <div class="kv"><div class="k">市值</div><div class="v">${fmtCap(s.marketCap)}</div></div>
+          <div class="kv kv-earn"><div class="k">财报 上次 / 下次</div>
+            <div class="earn v">${earnCell(s)}</div></div>
+          <div class="kv kv-sector"><div class="k">行业</div>
+            <div><span class="tag y">${esc(s.sectorCn)}</span></div></div>
+        </div>
         <button class="btn btn-blue btn-sm" data-news="${esc(s.symbol)}">刷新新闻</button>
       </div>
       <div class="news" id="nw-${esc(s.symbol)}"></div>
